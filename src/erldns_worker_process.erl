@@ -53,8 +53,13 @@ handle_call({process, DecodedMessage, Socket, {tcp, Address}}, _From, State) ->
   % simulate_timeout(DecodedMessage),  
   
   Response = erldns_handler:handle(DecodedMessage, {tcp, Address}),
-  EncodedMessage = erldns_encoder:encode_message(Response),
-  send_tcp_message(Socket, EncodedMessage),
+
+  try erldns_encoder:encode_message(Response) of
+    EncodedMessage -> send_tcp_message(Socket, EncodedMessage)
+  catch
+    error:Error -> {error, caught, Error}
+  end,
+
   {reply, ok, State}; 
 
 % Process a UDP request. May truncate the response.
@@ -66,7 +71,13 @@ handle_call({process, DecodedMessage, Socket, Port, {udp, Host}}, _From, State) 
   Response = erldns_handler:handle(DecodedMessage, {udp, Host}),
   DestHost = ?DEST_HOST(Host),
 
-  case erldns_encoder:encode_message(Response, [{'max_size', max_payload_size(Response)}]) of
+  Result = try erldns_encoder:encode_message(Response, [{'max_size', max_payload_size(Response)}]) of
+    R -> R
+  catch
+    error:Error -> {error, caught, Error}
+  end,
+
+  case Result of      
     {false, EncodedMessage} ->
       % lager:debug("Sending encoded response to ~p", [DestHost]),
       gen_udp:send(Socket, DestHost, Port, EncodedMessage);
@@ -75,7 +86,8 @@ handle_call({process, DecodedMessage, Socket, Port, {udp, Host}}, _From, State) 
     {false, EncodedMessage, _TsigMac} ->
       gen_udp:send(Socket, DestHost, Port, EncodedMessage);
     {true, EncodedMessage, _TsigMac, _Message} ->
-      gen_udp:send(Socket, DestHost, Port, EncodedMessage)
+      gen_udp:send(Socket, DestHost, Port, EncodedMessage);
+    _ -> ok
   end,
   {reply, ok, State}.
 
